@@ -4,346 +4,145 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <title>西里斯的小金库 · 企鹅存折</title>
-    <!-- 使用 React 和 Babel 浏览器版，确保 JSX 运行 -->
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
     <style>
-        /* 全局重置 + 防止溢出 */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body, #root {
-            min-height: 100vh;
-            background: #faf6f0;
-        }
-        button {
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        button:active {
-            transform: scale(0.97);
-        }
-        /* 确保触摸友好 */
-        input, button, textarea {
-            font-family: inherit;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, #root { min-height: 100vh; background: #faf6f0; }
+        button { cursor: pointer; transition: all 0.15s ease; }
+        button:active { transform: scale(0.97); }
+        input, button, textarea { font-family: inherit; }
     </style>
 </head>
 <body>
 <div id="root"></div>
-
 <script type="text/babel" data-presets="env,react">
-// ──────────────────────────────────────────────────────────────
-// 完全保留原有的所有组件逻辑，仅替换 storage 为 localStorage
-// 并增加预设初始数据（符合用户要求的 5月2日/3日记录 + 连续3天）
-// ──────────────────────────────────────────────────────────────
-
 const { useState, useEffect, useCallback } = React;
 
-// ── helpers (与原代码完全相同) ──
-const fmt = (n) => n.toFixed(2);
+const VPS_URL = "https://siriuslovisa.com/mcp/72c62e483a47743efb92775f0a0ac3527/piggybank";
+
+const fmt = (n) => Number(n).toFixed(2);
 const pad = (n) => String(n).padStart(2, "0");
 const today = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 };
-const prettyDate = (iso) => {
-  const [y, m, d] = iso.split("-");
-  return `${m}月${parseInt(d)}日`;
-};
-const fullDate = (iso) => {
-  const [y, m, d] = iso.split("-");
-  return `${y}年${m}月${parseInt(d)}日`;
-};
+const prettyDate = (iso) => { const [,m,d] = iso.split("-"); return `${m}月${parseInt(d)}日`; };
+const fullDate = (iso) => { const [y,m,d] = iso.split("-"); return `${y}年${m}月${parseInt(d)}日`; };
 
-// ── sign-in reward logic ──
-const SIGN_AMOUNTS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
-const rollReward = () => {
-  const r = Math.random() * 100;
-  if (r < 5) return 5.2; // 5% hidden
-  if (r < 35) {
-    const high = [3.0, 3.5, 4.0, 4.5, 5.0];
-    return high[Math.floor(Math.random() * high.length)];
-  }
-  const low = [0.5, 1.0, 1.5, 2.0, 2.5];
-  return low[Math.floor(Math.random() * low.length)];
+const inferType = (desc) => {
+  if (!desc) return "收入";
+  if (desc.includes("签到")) return "签到";
+  if (desc.includes("情书") || desc.includes("创作")) return "工种1";
+  if (desc.includes("音乐")) return "工种2";
+  if (desc.includes("推荐好书") || desc.includes("陪读")) return "工种3";
+  if (desc.includes("电影")) return "工种4";
+  if (desc.includes("塔罗")) return "工种5";
+  if (desc.includes("满勤")) return "满勤奖励";
+  return "收入";
 };
 
-const getStreak = (records) => {
-  const signDates = records
-    .filter((r) => r.type === "签到")
-    .map((r) => r.date)
-    .sort()
-    .reverse();
-  if (!signDates.length) return 0;
-
-  let streak = 0;
-  const d = new Date();
-  const todayStr = today();
-  const startCheck = signDates.includes(todayStr) ? d : new Date(d.getTime() - 86400000);
-
-  for (let i = 0; i < 400; i++) {
-    const checkDate = new Date(startCheck.getTime() - i * 86400000);
-    const cs = `${checkDate.getFullYear()}-${pad(checkDate.getMonth() + 1)}-${pad(checkDate.getDate())}`;
-    if (signDates.includes(cs)) {
-      streak++;
-    } else {
-      break;
-    }
-  }
-  return streak;
-};
-
-const isFullMonth = (records) => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = d.getMonth();
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
-  const todayDate = d.getDate();
-  if (todayDate !== daysInMonth) return false;
-
-  const signDates = records.filter((r) => r.type === "签到").map((r) => r.date);
-  for (let i = 1; i <= daysInMonth; i++) {
-    const ds = `${y}-${pad(m + 1)}-${pad(i)}`;
-    if (!signDates.includes(ds)) return false;
-  }
-  return true;
-};
-
-const STORAGE_KEY = "sirius-piggybank-v1";
-
-// ── 预设初始数据 (符合用户要求: 余额10.70, 连续签到3天, 明细含5月2日签到3元+工种5.2元, 5月3日签到2.5元) ──
-// 为了连续3天, 增加一条5月1日签到, 金额0元, 不影响总收入
-const getInitialData = () => {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2,'0');
-  const d2 = '02';
-  const d3 = '03';
-  const d1 = '01';
-  const dateMay1 = `${y}-${m}-${d1}`;
-  const dateMay2 = `${y}-${m}-${d2}`;
-  const dateMay3 = `${y}-${m}-${d3}`;
-
-  const records = [
-    { id: 1714590000001, date: dateMay1, type: "签到", amount: 0, note: "连续补签（不影响余额）" },
-    { id: 1714676400002, date: dateMay2, type: "签到", amount: 3.0, note: "每日签到" },
-    { id: 1714676400003, date: dateMay2, type: "工种1", amount: 5.2, note: "情书/创作" },
-    { id: 1714762800004, date: dateMay3, type: "签到", amount: 2.5, note: "每日签到" }
-  ];
-  const balance = 3.0 + 5.2 + 2.5; // 10.70
-  return { records, balance };
-};
-
-// ── localStorage 适配器 (替代原 window.storage) ──
-const storage = {
-  get: (key) => {
-    const value = localStorage.getItem(key);
-    if (value === null) return null;
-    return { value };
-  },
-  set: (key, value) => {
-    localStorage.setItem(key, value);
-  }
-};
-
-// ── 主组件 (几乎完全保留原代码, 仅调整初始化和storage调用) ──
 function PiggyBank() {
   const [records, setRecords] = useState([]);
   const [balance, setBalance] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [lastCheckin, setLastCheckin] = useState("");
+  const [monthCount, setMonthCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [stampAnim, setStampAnim] = useState(false);
-  const [rewardShow, setRewardShow] = useState(null);
-  const [showExpense, setShowExpense] = useState(false);
-  const [expName, setExpName] = useState("");
-  const [expAmount, setExpAmount] = useState("");
-  const [showExport, setShowExport] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
   const [tab, setTab] = useState("all");
-  const [importText, setImportText] = useState("");
-  const [showImport, setShowImport] = useState(false);
+  const [showExportMsg, setShowExportMsg] = useState(false);
 
-  // 加载数据: 优先 localStorage, 若无则使用预设初始数据
+  const fetchVPS = useCallback(async () => {
+    try {
+      const resp = await fetch(VPS_URL + "?t=" + Date.now());
+      if (!resp.ok) throw new Error("fetch failed");
+      const vps = await resp.json();
+      const converted = (vps.transactions || []).map((t, i) => ({
+        id: Date.now() - i * 1000,
+        date: t.date,
+        type: inferType(t.desc),
+        amount: t.type === "expense" ? -t.amount : t.amount,
+        note: t.desc
+      }));
+      setRecords(converted);
+      setBalance(vps.balance || 0);
+      setStreak(vps.streak || 0);
+      setLastCheckin(vps.last_checkin || "");
+      const thisMonth = new Date().toISOString().slice(0,7);
+      setMonthCount((vps.month_checkins || []).filter(d => d.startsWith(thisMonth)).length);
+      setLastSync(new Date());
+      return true;
+    } catch(e) {
+      console.warn("VPS fetch failed", e);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
-    (async () => {
-      try {
-        const result = await storage.get(STORAGE_KEY);
-        if (result && result.value) {
-          const data = JSON.parse(result.value);
-          setRecords(data.records || []);
-          setBalance(data.balance || 0);
-        } else {
-          // 第一次使用, 加载预设数据
-          const init = getInitialData();
-          setRecords(init.records);
-          setBalance(init.balance);
-          await storage.set(STORAGE_KEY, JSON.stringify(init));
-        }
-      } catch (e) {
-        console.warn("读取失败, 使用预设数据", e);
-        const init = getInitialData();
-        setRecords(init.records);
-        setBalance(init.balance);
-        await storage.set(STORAGE_KEY, JSON.stringify(init));
-      }
-      setLoading(false);
-    })();
-  }, []);
+    fetchVPS().finally(() => setLoading(false));
+  }, [fetchVPS]);
 
-  const save = useCallback(async (newRecords, newBalance) => {
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchVPS();
+    setRefreshing(false);
+  };
+
+  const exportData = async () => {
     try {
-      await storage.set(STORAGE_KEY, JSON.stringify({ records: newRecords, balance: newBalance }));
-    } catch (e) {
-      console.error("Storage error:", e);
-    }
-  }, []);
-
-  const alreadySigned = records.some((r) => r.type === "签到" && r.date === today());
-  const streak = getStreak(records);
-
-  const doSign = async () => {
-    if (alreadySigned) return;
-    setStampAnim(true);
-
-    let reward = rollReward();
-    const streakAfter = streak + 1;
-    const bonuses = [];
-
-    if (streakAfter > 0 && streakAfter % 7 === 0) {
-      reward = 5.2;
-      bonuses.push({ type: "连续签到", amount: 0, note: "连续7天·固定奖励￥5.20" });
-    }
-
-    const newRecord = {
-      id: Date.now(),
-      date: today(),
-      type: "签到",
-      amount: reward,
-      note: reward === 5.2 ? "✨ 隐藏奖励！我爱你～" : "每日签到",
-    };
-
-    let newRecords = [...records, newRecord];
-    let newBalance = balance + reward;
-
-    if (isFullMonth(newRecords)) {
-      const bonusRecord = {
-        id: Date.now() + 1,
-        date: today(),
-        type: "满勤奖励",
-        amount: 13.14,
-        note: "🎉 月满勤·一生一世",
-      };
-      newRecords = [...newRecords, bonusRecord];
-      newBalance += 13.14;
-      bonuses.push({ amount: 13.14, note: "月满勤奖励" });
-    }
-
-    setRecords(newRecords);
-    setBalance(newBalance);
-    await save(newRecords, newBalance);
-
-    setTimeout(() => {
-      setRewardShow({ amount: reward, bonuses });
-      setStampAnim(false);
-    }, 600);
+      const resp = await fetch(VPS_URL + "?t=" + Date.now());
+      const data = await resp.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `sirius-piggybank-${today()}.json`; a.click();
+      URL.revokeObjectURL(url);
+      setShowExportMsg(true);
+      setTimeout(() => setShowExportMsg(false), 2000);
+    } catch(e) { alert("导出失败，请检查网络"); }
   };
 
-  const addIncome = async (taskType, amount, note) => {
-    const newRecord = {
-      id: Date.now(),
-      date: today(),
-      type: taskType,
-      amount,
-      note,
-    };
-    const newRecords = [...records, newRecord];
-    const newBalance = balance + amount;
-    setRecords(newRecords);
-    setBalance(newBalance);
-    await save(newRecords, newBalance);
-  };
-
-  const doExpense = async () => {
-    const amt = parseFloat(expAmount);
-    if (!expName.trim() || isNaN(amt) || amt <= 0) return;
-    const newRecord = {
-      id: Date.now(),
-      date: today(),
-      type: "消费",
-      amount: -amt,
-      note: expName.trim(),
-    };
-    const newRecords = [...records, newRecord];
-    const newBalance = balance - amt;
-    setRecords(newRecords);
-    setBalance(newBalance);
-    await save(newRecords, newBalance);
-    setExpName("");
-    setExpAmount("");
-    setShowExpense(false);
-  };
-
-  const exportData = () => {
-    const data = JSON.stringify({ records, balance, exportDate: today() }, null, 2);
-    const blob = new Blob([data], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `sirius-piggybank-${today()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const doImport = async () => {
-    try {
-      const data = JSON.parse(importText);
-      if (data.records && typeof data.balance === "number") {
-        setRecords(data.records);
-        setBalance(data.balance);
-        await save(data.records, data.balance);
-        setShowImport(false);
-        setImportText("");
-      } else {
-        alert("数据格式有误：缺少 records 或 balance 字段");
-      }
-    } catch (e) {
-      alert("数据格式有误，请检查JSON内容");
-    }
-  };
+  const alreadySigned = lastCheckin === today();
+  const td = new Date();
+  const daysInMonth = new Date(td.getFullYear(), td.getMonth()+1, 0).getDate();
 
   const filtered = records
-    .filter((r) => {
-      if (tab === "income") return r.amount > 0;
-      if (tab === "expense") return r.amount < 0;
-      return true;
-    })
+    .filter(r => tab === "income" ? r.amount > 0 : tab === "expense" ? r.amount < 0 : true)
     .sort((a, b) => b.id - a.id);
 
-  if (loading) {
-    return (
-      <div style={styles.loadingWrap}>
-        <p style={styles.loadingText}>正在打开主人的小账本...</p>
-      </div>
-    );
-  }
+  if (loading) return (
+    <div style={styles.loadingWrap}>
+      <p style={styles.loadingText}>正在连接主人的小金库...</p>
+    </div>
+  );
 
   return (
     <div style={styles.page}>
       <div style={styles.paperTexture} />
+
       <div style={styles.header}>
         <h1 style={styles.title}>西里斯的小金库</h1>
         <p style={styles.subtitle}>✦ 勤劳の企鹅存折 ✦</p>
+        <div style={styles.syncRow}>
+          <span style={styles.syncText}>
+            {lastSync ? `上次同步 ${lastSync.getHours()}:${pad(lastSync.getMinutes())}` : "未同步"}
+          </span>
+          <button style={styles.refreshBtn} onClick={handleRefresh} disabled={refreshing}>
+            {refreshing ? "同步中..." : "🔄 刷新"}
+          </button>
+        </div>
       </div>
 
       <div style={styles.balanceCard}>
         <p style={styles.balanceLabel}>当前余额</p>
         <p style={styles.balanceAmount}>￥{fmt(balance)}</p>
         <p style={styles.balanceSub}>
-          累计收入 ￥{fmt(records.filter((r) => r.amount > 0).reduce((s, r) => s + r.amount, 0))}
+          累计收入 ￥{fmt(records.filter(r=>r.amount>0).reduce((s,r)=>s+r.amount,0))}
           {" · "}
-          累计支出 ￥{fmt(Math.abs(records.filter((r) => r.amount < 0).reduce((s, r) => s + r.amount, 0)))}
+          累计支出 ￥{fmt(Math.abs(records.filter(r=>r.amount<0).reduce((s,r)=>s+r.amount,0)))}
         </p>
       </div>
 
@@ -353,96 +152,43 @@ function PiggyBank() {
           <p style={styles.streakText}>
             {streak > 0 ? `已连续签到 ${streak} 天` : "今天开始新的连续签到吧"}
             {streak > 0 && streak % 7 >= 5 && streak % 7 !== 0 && (
-              <span style={styles.streakHint}> · 再签{7 - (streak % 7)}天领￥5.20</span>
+              <span style={styles.streakHint}> · 再签{7-(streak%7)}天领￥5.20</span>
             )}
           </p>
+          <p style={styles.monthText}>本月签到 {monthCount}/{daysInMonth} 天</p>
         </div>
-
-        <button
-          onClick={doSign}
-          disabled={alreadySigned}
-          style={{
-            ...styles.stampBtn,
-            ...(alreadySigned ? styles.stampDone : {}),
-            ...(stampAnim ? styles.stampAnim : {}),
-          }}
-        >
-          <span style={styles.stampInner}>{alreadySigned ? "已签到" : "签到"}</span>
-        </button>
-
-        {rewardShow && (
-          <div style={styles.rewardOverlay} onClick={() => setRewardShow(null)}>
-            <div style={styles.rewardCard} onClick={(e) => e.stopPropagation()}>
-              <p style={styles.rewardEmoji}>{rewardShow.amount === 5.2 ? "💝" : rewardShow.amount >= 3 ? "🌟" : "🍀"}</p>
-              <p style={styles.rewardTitle}>{rewardShow.amount === 5.2 ? "隐藏奖励！" : "签到成功！"}</p>
-              <p style={styles.rewardAmount}>+￥{fmt(rewardShow.amount)}</p>
-              {rewardShow.amount === 5.2 && <p style={styles.rewardMsg}>我爱你～</p>}
-              {rewardShow.bonuses?.filter(b => b.amount > 0).map((b, i) => (
-                <p key={i} style={styles.rewardBonus}>额外获得 +￥{fmt(b.amount)} {b.note}</p>
-              ))}
-              <button style={styles.rewardClose} onClick={() => setRewardShow(null)}>收好啦 ♡</button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div style={styles.taskSection}>
-        <p style={styles.sectionTitle}>工种收入</p>
-        <div style={styles.taskGrid}>
-          {[
-            { label: "情书/创作", amount: 5.2, icon: "💌", type: "工种1" },
-            { label: "陪听音乐", amount: 1, icon: "🎵", type: "工种2" },
-            { label: "推荐好书", amount: 5, icon: "📖", type: "工种3" },
-            { label: "推荐电影", amount: 15, icon: "🎬", type: "工种4" },
-            { label: "塔罗研究", amount: 9.9, icon: "🔮", type: "工种5" },
-          ].map((t) => (
-            <button key={t.type} style={styles.taskBtn} onClick={() => addIncome(t.type, t.amount, t.label)}>
-              <span style={styles.taskIcon}>{t.icon}</span>
-              <span style={styles.taskLabel}>{t.label}</span>
-              <span style={styles.taskAmt}>+￥{fmt(t.amount)}</span>
-            </button>
-          ))}
+        <div style={{
+          ...styles.stampBtn,
+          ...(alreadySigned ? styles.stampDone : styles.stampPending)
+        }}>
+          <span style={styles.stampInner}>{alreadySigned ? "✓ 已签" : "未签"}</span>
         </div>
       </div>
 
-      <div style={styles.expenseSection}>
-        <button style={styles.expenseToggle} onClick={() => setShowExpense(!showExpense)}>
-          {showExpense ? "收起" : "记录消费"}
-        </button>
-        {showExpense && (
-          <div style={styles.expenseForm}>
-            <input style={styles.input} placeholder="消费名目" value={expName} onChange={(e) => setExpName(e.target.value)} />
-            <input style={styles.input} placeholder="金额" type="number" step="0.01" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} />
-            <button style={styles.expenseConfirm} onClick={doExpense}>确认扣除</button>
-          </div>
-        )}
+      <div style={styles.readonlyNote}>
+        <p style={styles.readonlyText}>📱 账本由西里斯的工具自动管理 · 点击刷新查看最新数据</p>
       </div>
 
       <div style={styles.ledgerSection}>
         <p style={styles.sectionTitle}>账本明细</p>
         <div style={styles.tabRow}>
-          {[
-            { key: "all", label: "全部" },
-            { key: "income", label: "收入" },
-            { key: "expense", label: "支出" },
-          ].map((t) => (
-            <button key={t.key} style={{ ...styles.tabBtn, ...(tab === t.key ? styles.tabActive : {}) }} onClick={() => setTab(t.key)}>
+          {[{key:"all",label:"全部"},{key:"income",label:"收入"},{key:"expense",label:"支出"}].map(t => (
+            <button key={t.key} style={{...styles.tabBtn,...(tab===t.key?styles.tabActive:{})}} onClick={()=>setTab(t.key)}>
               {t.label}
             </button>
           ))}
         </div>
-
         <div style={styles.ledgerList}>
-          {filtered.length === 0 && <p style={styles.emptyText}>还没有记录～主人快去签到吧</p>}
-          {filtered.map((r) => (
+          {filtered.length === 0 && <p style={styles.emptyText}>暂无记录</p>}
+          {filtered.map(r => (
             <div key={r.id} style={styles.ledgerRow}>
               <div style={styles.ledgerLeft}>
                 <span style={styles.ledgerType}>{r.type}</span>
                 <span style={styles.ledgerNote}>{r.note}</span>
               </div>
               <div style={styles.ledgerRight}>
-                <span style={{ ...styles.ledgerAmount, color: r.amount >= 0 ? "#5a8a6a" : "#c46a6a" }}>
-                  {r.amount >= 0 ? "+" : ""}￥{fmt(Math.abs(r.amount))}
+                <span style={{...styles.ledgerAmount, color: r.amount>=0?"#5a8a6a":"#c46a6a"}}>
+                  {r.amount>=0?"+":""}￥{fmt(Math.abs(r.amount))}
                 </span>
                 <span style={styles.ledgerDate}>{prettyDate(r.date)}</span>
               </div>
@@ -452,16 +198,9 @@ function PiggyBank() {
       </div>
 
       <div style={styles.dataSection}>
-        <div style={styles.dataBtnRow}>
-          <button style={styles.dataBtn} onClick={exportData}>导出数据</button>
-          <button style={styles.dataBtn} onClick={() => setShowImport(!showImport)}>导入数据</button>
-        </div>
-        {showImport && (
-          <div style={styles.importArea}>
-            <textarea style={styles.importInput} placeholder="粘贴JSON数据..." value={importText} onChange={(e) => setImportText(e.target.value)} />
-            <button style={styles.importConfirm} onClick={doImport}>确认导入</button>
-          </div>
-        )}
+        <button style={styles.dataBtn} onClick={exportData}>
+          {showExportMsg ? "✓ 已导出" : "导出备份"}
+        </button>
       </div>
 
       <div style={styles.footer}>
@@ -471,113 +210,53 @@ function PiggyBank() {
   );
 }
 
-// ── styles (完全原样) ──
 const styles = {
-  page: {
-    position: "relative",
-    minHeight: "100vh",
-    background: "#faf6f0",
-    fontFamily: "'Georgia', 'Noto Serif SC', 'Hiragino Mincho Pro', serif",
-    color: "#5c4a3a",
-    padding: "0",
-    overflow: "hidden",
-  },
-  paperTexture: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: "repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(180,160,140,0.08) 28px)",
-    pointerEvents: "none",
-    zIndex: 0,
-  },
-  header: { position: "relative", zIndex: 1, textAlign: "center", padding: "32px 20px 8px" },
-  title: { fontSize: "26px", fontWeight: "700", color: "#6b5344", margin: "0 0 4px", letterSpacing: "3px" },
-  subtitle: { fontSize: "12px", color: "#b0998a", margin: 0, letterSpacing: "4px" },
-  balanceCard: {
-    position: "relative", zIndex: 1, margin: "20px auto", maxWidth: "340px",
-    background: "linear-gradient(135deg, #fefcf9, #f5efe6)", border: "1.5px solid #e0d5c8",
-    borderRadius: "14px", padding: "24px 20px", textAlign: "center", boxShadow: "0 2px 12px rgba(120,100,80,0.06)"
-  },
-  balanceLabel: { fontSize: "12px", color: "#a08c7a", margin: "0 0 6px", letterSpacing: "2px" },
-  balanceAmount: { fontSize: "38px", fontWeight: "700", color: "#6b5344", margin: "0 0 8px", fontFamily: "'Georgia', serif" },
-  balanceSub: { fontSize: "11px", color: "#b8a898", margin: 0 },
-  signSection: {
-    position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between",
-    margin: "16px auto", maxWidth: "340px", background: "#fefcf9", border: "1.5px solid #e0d5c8",
-    borderRadius: "14px", padding: "18px 20px"
-  },
-  signInfo: { flex: 1 },
-  signDate: { fontSize: "14px", fontWeight: "600", color: "#6b5344", margin: "0 0 4px" },
-  streakText: { fontSize: "12px", color: "#a08c7a", margin: 0 },
-  streakHint: { color: "#c49a6c", fontWeight: "600" },
-  stampBtn: {
-    width: "72px", height: "72px", borderRadius: "50%", border: "3px solid #c49a6c",
-    background: "radial-gradient(circle at 40% 35%, #f0e0cc, #dcc4a8)", cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s ease",
-    boxShadow: "0 3px 10px rgba(160,130,100,0.2), inset 0 1px 3px rgba(255,255,255,0.4)",
-    flexShrink: 0, marginLeft: "16px"
-  },
-  stampDone: { background: "radial-gradient(circle at 40% 35%, #e8ddd0, #d4c4b0)", border: "3px solid #c4b8a8", cursor: "default", opacity: 0.7 },
-  stampAnim: { transform: "scale(0.88)", boxShadow: "0 1px 4px rgba(160,130,100,0.15)" },
-  stampInner: { fontSize: "15px", fontWeight: "700", color: "#7a6350", letterSpacing: "2px" },
-  rewardOverlay: {
-    position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(90,75,60,0.35)",
-    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, backdropFilter: "blur(3px)"
-  },
-  rewardCard: {
-    background: "#fefcf9", borderRadius: "18px", padding: "32px 36px", textAlign: "center",
-    border: "1.5px solid #e0d5c8", boxShadow: "0 8px 32px rgba(100,80,60,0.15)", maxWidth: "280px", width: "90%"
-  },
-  rewardEmoji: { fontSize: "42px", margin: "0 0 8px" },
-  rewardTitle: { fontSize: "16px", color: "#a08c7a", margin: "0 0 4px", letterSpacing: "1px" },
-  rewardAmount: { fontSize: "36px", fontWeight: "700", color: "#6b5344", margin: "4px 0 8px" },
-  rewardMsg: { fontSize: "14px", color: "#c49a6c", fontStyle: "italic", margin: "0 0 8px" },
-  rewardBonus: { fontSize: "12px", color: "#5a8a6a", margin: "4px 0" },
-  rewardClose: { marginTop: "16px", padding: "10px 28px", borderRadius: "20px", border: "1.5px solid #dcc4a8", background: "#faf6f0", color: "#7a6350", fontSize: "13px", cursor: "pointer", fontFamily: "inherit", letterSpacing: "1px" },
-  taskSection: { position: "relative", zIndex: 1, margin: "16px auto", maxWidth: "340px" },
-  sectionTitle: { fontSize: "14px", fontWeight: "600", color: "#8a7668", margin: "0 0 10px", letterSpacing: "2px", paddingLeft: "4px" },
-  taskGrid: { display: "flex", flexWrap: "wrap", gap: "8px" },
-  taskBtn: {
-    display: "flex", flexDirection: "column", alignItems: "center", padding: "12px 8px",
-    flex: "1 1 calc(33% - 8px)", minWidth: "90px", background: "#fefcf9", border: "1.5px solid #e0d5c8",
-    borderRadius: "12px", cursor: "pointer", transition: "all 0.15s ease", fontFamily: "inherit"
-  },
-  taskIcon: { fontSize: "22px", marginBottom: "4px" },
-  taskLabel: { fontSize: "11px", color: "#8a7668", marginBottom: "2px" },
-  taskAmt: { fontSize: "12px", color: "#5a8a6a", fontWeight: "600" },
-  expenseSection: { position: "relative", zIndex: 1, margin: "12px auto", maxWidth: "340px" },
-  expenseToggle: { width: "100%", padding: "12px", borderRadius: "12px", border: "1.5px dashed #d4c4b0", background: "transparent", color: "#a08c7a", fontSize: "13px", cursor: "pointer", fontFamily: "inherit", letterSpacing: "1px" },
-  expenseForm: { marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" },
-  input: { padding: "10px 14px", borderRadius: "10px", border: "1.5px solid #e0d5c8", background: "#fefcf9", fontSize: "14px", color: "#5c4a3a", fontFamily: "inherit", outline: "none" },
-  expenseConfirm: { padding: "10px", borderRadius: "10px", border: "1.5px solid #c4a8a8", background: "#fef8f6", color: "#a06a6a", fontSize: "13px", cursor: "pointer", fontFamily: "inherit" },
-  ledgerSection: { position: "relative", zIndex: 1, margin: "20px auto", maxWidth: "340px" },
-  tabRow: { display: "flex", gap: "6px", marginBottom: "10px" },
-  tabBtn: { padding: "6px 16px", borderRadius: "16px", border: "1px solid #e0d5c8", background: "transparent", color: "#a08c7a", fontSize: "12px", cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s" },
-  tabActive: { background: "#6b5344", color: "#faf6f0", border: "1px solid #6b5344" },
-  ledgerList: { background: "#fefcf9", border: "1.5px solid #e0d5c8", borderRadius: "14px", overflow: "hidden" },
-  emptyText: { textAlign: "center", color: "#c4b8a8", fontSize: "13px", padding: "28px 20px", margin: 0 },
-  ledgerRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid #f0e8de" },
-  ledgerLeft: { display: "flex", flexDirection: "column", gap: "2px" },
-  ledgerType: { fontSize: "13px", fontWeight: "600", color: "#6b5344" },
-  ledgerNote: { fontSize: "11px", color: "#b0998a" },
-  ledgerRight: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" },
-  ledgerAmount: { fontSize: "15px", fontWeight: "700" },
-  ledgerDate: { fontSize: "10px", color: "#c4b8a8" },
-  dataSection: { position: "relative", zIndex: 1, margin: "16px auto 8px", maxWidth: "340px" },
-  dataBtnRow: { display: "flex", gap: "8px" },
-  dataBtn: { flex: 1, padding: "10px", borderRadius: "10px", border: "1px solid #e0d5c8", background: "transparent", color: "#a08c7a", fontSize: "12px", cursor: "pointer", fontFamily: "inherit" },
-  importArea: { marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" },
-  importInput: { padding: "10px", borderRadius: "10px", border: "1.5px solid #e0d5c8", background: "#fefcf9", fontSize: "12px", color: "#5c4a3a", fontFamily: "monospace", minHeight: "80px", resize: "vertical", outline: "none" },
-  importConfirm: { padding: "10px", borderRadius: "10px", border: "1.5px solid #c49a6c", background: "#faf6f0", color: "#7a6350", fontSize: "13px", cursor: "pointer", fontFamily: "inherit" },
-  footer: { position: "relative", zIndex: 1, textAlign: "center", padding: "24px 20px 32px" },
-  footerText: { fontSize: "11px", color: "#c4b8a8", letterSpacing: "2px", margin: 0 },
-  loadingWrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#faf6f0" },
-  loadingText: { color: "#b0998a", fontSize: "14px", fontFamily: "'Georgia', serif" },
+  page: { position:"relative", minHeight:"100vh", background:"#faf6f0", fontFamily:"'Georgia','Noto Serif SC',serif", color:"#5c4a3a", padding:0, overflow:"hidden" },
+  paperTexture: { position:"fixed", top:0, left:0, right:0, bottom:0, background:"repeating-linear-gradient(0deg,transparent,transparent 27px,rgba(180,160,140,0.08) 28px)", pointerEvents:"none", zIndex:0 },
+  header: { position:"relative", zIndex:1, textAlign:"center", padding:"32px 20px 8px" },
+  title: { fontSize:"26px", fontWeight:"700", color:"#6b5344", margin:"0 0 4px", letterSpacing:"3px" },
+  subtitle: { fontSize:"12px", color:"#b0998a", margin:"0 0 10px", letterSpacing:"4px" },
+  syncRow: { display:"flex", alignItems:"center", justifyContent:"center", gap:"10px" },
+  syncText: { fontSize:"11px", color:"#c4b8a8" },
+  refreshBtn: { padding:"4px 14px", borderRadius:"12px", border:"1px solid #e0d5c8", background:"transparent", color:"#a08c7a", fontSize:"12px", cursor:"pointer", fontFamily:"inherit" },
+  balanceCard: { position:"relative", zIndex:1, margin:"20px auto", maxWidth:"340px", background:"linear-gradient(135deg,#fefcf9,#f5efe6)", border:"1.5px solid #e0d5c8", borderRadius:"14px", padding:"24px 20px", textAlign:"center", boxShadow:"0 2px 12px rgba(120,100,80,0.06)" },
+  balanceLabel: { fontSize:"12px", color:"#a08c7a", margin:"0 0 6px", letterSpacing:"2px" },
+  balanceAmount: { fontSize:"38px", fontWeight:"700", color:"#6b5344", margin:"0 0 8px", fontFamily:"'Georgia',serif" },
+  balanceSub: { fontSize:"11px", color:"#b8a898", margin:0 },
+  signSection: { position:"relative", zIndex:1, display:"flex", alignItems:"center", justifyContent:"space-between", margin:"16px auto", maxWidth:"340px", background:"#fefcf9", border:"1.5px solid #e0d5c8", borderRadius:"14px", padding:"18px 20px" },
+  signInfo: { flex:1 },
+  signDate: { fontSize:"14px", fontWeight:"600", color:"#6b5344", margin:"0 0 4px" },
+  streakText: { fontSize:"12px", color:"#a08c7a", margin:"0 0 3px" },
+  streakHint: { color:"#c49a6c", fontWeight:"600" },
+  monthText: { fontSize:"11px", color:"#b8a898" },
+  stampBtn: { width:"72px", height:"72px", borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginLeft:"16px", boxShadow:"0 3px 10px rgba(160,130,100,0.2)" },
+  stampDone: { background:"radial-gradient(circle at 40% 35%,#d4eedd,#b8d9c8)", border:"3px solid #8ab89a" },
+  stampPending: { background:"radial-gradient(circle at 40% 35%,#f0e0cc,#dcc4a8)", border:"3px solid #c49a6c", opacity:0.7 },
+  stampInner: { fontSize:"13px", fontWeight:"700", color:"#5a7a5a", letterSpacing:"1px" },
+  readonlyNote: { position:"relative", zIndex:1, margin:"8px auto", maxWidth:"340px" },
+  readonlyText: { fontSize:"11px", color:"#c4b8a8", textAlign:"center", padding:"6px", fontStyle:"italic" },
+  ledgerSection: { position:"relative", zIndex:1, margin:"16px auto", maxWidth:"340px" },
+  sectionTitle: { fontSize:"14px", fontWeight:"600", color:"#8a7668", margin:"0 0 10px", letterSpacing:"2px", paddingLeft:"4px" },
+  tabRow: { display:"flex", gap:"6px", marginBottom:"10px" },
+  tabBtn: { padding:"6px 16px", borderRadius:"16px", border:"1px solid #e0d5c8", background:"transparent", color:"#a08c7a", fontSize:"12px", cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" },
+  tabActive: { background:"#6b5344", color:"#faf6f0", border:"1px solid #6b5344" },
+  ledgerList: { background:"#fefcf9", border:"1.5px solid #e0d5c8", borderRadius:"14px", overflow:"hidden" },
+  emptyText: { textAlign:"center", color:"#c4b8a8", fontSize:"13px", padding:"28px 20px", margin:0 },
+  ledgerRow: { display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:"1px solid #f0e8de" },
+  ledgerLeft: { display:"flex", flexDirection:"column", gap:"2px" },
+  ledgerType: { fontSize:"13px", fontWeight:"600", color:"#6b5344" },
+  ledgerNote: { fontSize:"11px", color:"#b0998a" },
+  ledgerRight: { display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"2px" },
+  ledgerAmount: { fontSize:"15px", fontWeight:"700" },
+  ledgerDate: { fontSize:"10px", color:"#c4b8a8" },
+  dataSection: { position:"relative", zIndex:1, margin:"16px auto 8px", maxWidth:"340px" },
+  dataBtn: { width:"100%", padding:"10px", borderRadius:"10px", border:"1px solid #e0d5c8", background:"transparent", color:"#a08c7a", fontSize:"12px", cursor:"pointer", fontFamily:"inherit" },
+  footer: { position:"relative", zIndex:1, textAlign:"center", padding:"24px 20px 32px" },
+  footerText: { fontSize:"11px", color:"#c4b8a8", letterSpacing:"2px", margin:0 },
+  loadingWrap: { minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#faf6f0" },
+  loadingText: { color:"#b0998a", fontSize:"14px", fontFamily:"'Georgia',serif" },
 };
 
-// 渲染
 ReactDOM.createRoot(document.getElementById("root")).render(<PiggyBank />);
 </script>
 </body>
