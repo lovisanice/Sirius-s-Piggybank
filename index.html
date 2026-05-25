@@ -64,7 +64,7 @@ function PiggyBank() {
         id: Date.now() - i * 1000,
         date: t.date,
         type: inferType(t.desc),
-        amount: t.type === "expense" ? -t.amount : t.amount,
+        amount: t.type === "expense" ? "消费" : inferType(t.desc),
         note: t.desc
       }));
       setRecords(converted);
