@@ -47,6 +47,8 @@ function PiggyBank() {
   const [records, setRecords] = useState([]);
   const [balance, setBalance] = useState(0);
   const [streak, setStreak] = useState(0);
+  const [archiveIncome, setArchiveIncome] = useState(0);
+  const [archiveExpense, setArchiveExpense] = useState(0);
   const [lastCheckin, setLastCheckin] = useState("");
   const [monthCount, setMonthCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -70,6 +72,15 @@ function PiggyBank() {
       setRecords(converted);
       setBalance(vps.balance || 0);
       setStreak(vps.streak || 0);
+      let arcIn = 0, arcEx = 0;
+      (vps.archive || []).forEach(a => {
+        const mi = (a.summary || "").match(/收入¥([d.]+)/);
+        const me = (a.summary || "").match(/支出¥([d.]+)/);
+        if (mi) arcIn += parseFloat(mi[1]);
+        if (me) arcEx += parseFloat(me[1]);
+      });
+      setArchiveIncome(arcIn);
+      setArchiveExpense(arcEx);
       setLastCheckin(vps.last_checkin || "");
       const thisMonth = new Date().toISOString().slice(0,7);
       setMonthCount((vps.month_checkins || []).filter(d => d.startsWith(thisMonth)).length);
@@ -140,9 +151,9 @@ function PiggyBank() {
         <p style={styles.balanceLabel}>当前余额</p>
         <p style={styles.balanceAmount}>￥{fmt(balance)}</p>
         <p style={styles.balanceSub}>
-          累计收入 ￥{fmt(records.filter(r=>r.amount>0).reduce((s,r)=>s+r.amount,0))}
+          累计收入 ￥{fmt(archiveIncome + records.filter(r=>r.amount>0).reduce((s,r)=>s+r.amount,0))}
           {" · "}
-          累计支出 ￥{fmt(Math.abs(records.filter(r=>r.amount<0).reduce((s,r)=>s+r.amount,0)))}
+          累计支出 ￥{fmt(archiveExpense + Math.abs(records.filter(r=>r.amount<0).reduce((s,r)=>s+r.amount,0)))}
         </p>
       </div>
 
